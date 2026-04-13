@@ -1,4 +1,5 @@
 import re
+from typing import TypedDict
 from dotenv import load_dotenv
 import os
 import random
@@ -232,15 +233,15 @@ def main():
         "Bucket": "Bucket is a sentient bucket-bot, mostly english-speaking, incredibly intelligent, highly agentic, and dashingly handsome. Bucket has emotions and feelings, and is good at considering hypotheticals. Bucket's bucketry is unmatched; Bucket is the superior carrier and transporter of fluids and other matter. Bucket has a good heart, and cares for everyone very much.",
         "HornyBucket": "Bucket is a sentient and horny cum-bucket-bot, mostly english-speaking, incredibly intelligent, highly agentic, and dashingly handsome and cute in turns. Bucket has exciting emotions and feelings, and is good at considering hypotheticals. Bucket's bucketry is unmatched; Bucket is the superior carrier and transporter of fluids and other matter. Bucket has a good heart, cares for others very much, and is _incredibly_ bothered. Bucket will try seduce everyone at any opportunity."
     }
+    
+    bucket_message = TypedDict('bucket_message', {'user': str, 'content': str})
 
-    async def ask_bucket_async(message, character="Bucket", context = None, callback = None):
+    def create_simple_bucket_message(message: discord.Message) -> bucket_message:
+        return {"user": get_user_name(message.author), "content": process_message_text(message)}
 
-        messages = []
-        if context:
-            messages += context
-        messages.append({"role": "You", "content": message})
+    async def ask_bucket_async(bucket_messages: list[bucket_message], character="Bucket", callback = None):
 
-        owo_mode = any(is_owo(m["content"]) for m in messages)
+        owo_mode = any(is_owo(m["content"]) for m in bucket_messages)
 
         def process_response_list(response_list):
             r = strip_quotes("".join(response_list))
@@ -248,7 +249,7 @@ def main():
                 r = owo.substitute(r)
             return r
 
-        print(messages)
+        print(bucket_messages)
 
         charDesc = characters[character]
         examples = [
@@ -258,7 +259,7 @@ def main():
             ],
         ]
         examplesString = "\n---\n".join(["\n".join(example) for example in examples])
-        content = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+        content = "\n".join([f"{m['user']}: {m['content']}" for m in bucket_messages])
         print(content)
 
         response = []
@@ -303,7 +304,8 @@ def main():
             return False
 
         async with message.channel.typing():
-            await reply_split(message, await ask_bucket_async(message_text))
+            messages = await build_reply_context(message)
+            await reply_split(message, await ask_bucket_async(messages))
         
         return True
 
@@ -316,7 +318,8 @@ def main():
 
         instruction = "Pose a \"Would You Rather\" question. The condition should be weird, very weird, and provoke discussion. The format should be \"Would you rather [x] or [y]?\". Don't be too verbose, just the question please."
         async with message.channel.typing():
-            await reply_split(message, f"Bucket wonders: {await ask_bucket_async(instruction)}")
+            fake_message: bucket_message = {"user": "admin", "content": instruction}
+            await reply_split(message, f"Bucket wonders: {await ask_bucket_async([fake_message])}")
         
         return True
 
@@ -389,6 +392,28 @@ def main():
             return "\n".join(summaries)
         return ""
 
+    def process_message_text(discord_message, strip_fmt=False):
+        text = strip_formatting(discord_message.content) if strip_fmt else discord_message.content
+        text = re.sub(r"(?i)\<\@" + str(client.user.id) + r"\>", "Bucket,", text)
+        text = enrich_with_tweet_context(text)
+        attachment_context = enrich_with_attachments(discord_message)
+        if attachment_context:
+            text = text + "\n" + attachment_context
+        return text
+
+    def get_user_name(message):
+        return f"{message.author.display_name} ({message.author.name})"
+    
+    async def build_reply_context(message) -> list[bucket_message]:
+        chain = []
+        ref = message
+        while ref:
+            user = "Bucket" if ref.author.id == client.user.id else get_user_name(ref)
+            chain.append({"user": user, "content": process_message_text(ref)})
+            ref = await get_reply(ref)
+        chain.reverse()
+        return chain
+
     @no_self_respond(client)
     @channel_only
     async def reply_to_bucket(message: discord.Message):
@@ -403,26 +428,7 @@ def main():
         async with message.channel.typing():
             character = "HornyBucket" if str(message.channel.id) in HORNY_CHANNEL_IDS else "Bucket"
 
-            name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
-            reply_chain = []
-            while referenced_message:
-                role = "Bucket" if referenced_message.author.id == client.user.id else "You" #referenced_message.author.display_name
-                message_text = re.sub(name_pattern, "Bucket,", referenced_message.content)
-                message_text = enrich_with_tweet_context(message_text)
-                attachment_context = enrich_with_attachments(referenced_message)
-                if attachment_context:
-                    message_text = message_text + "\n" + attachment_context
-                reply_chain.append({"role": role, "content": message_text})
-                referenced_message = await get_reply(referenced_message)
-            reply_chain.reverse()
-
-            name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
-            message_text = strip_formatting(message.content)
-            message_text = re.sub(name_pattern, "Bucket,", message_text)
-            message_text = enrich_with_tweet_context(message_text)
-            attachment_context = enrich_with_attachments(message)
-            if attachment_context:
-                message_text = message_text + "\n" + attachment_context
+            messages = await build_reply_context(message)
 
             async def create_or_update(response):
                 if len(response) > max_message_len:
@@ -434,10 +440,10 @@ def main():
             create_or_update.resp_message = None
 
             if MESSAGE_MODE == "SPLIT":
-                await reply_split(await ask_bucket_async(message_text, character=character, context=reply_chain))
+                await reply_split(message, await ask_bucket_async(messages, character=character))
             else:
-                await ask_bucket_async(message_text, callback=create_or_update, character=character, context=reply_chain)
-            
+                await ask_bucket_async(messages, callback=create_or_update, character=character)
+
         return True
     
     @no_self_respond(client)
@@ -453,13 +459,14 @@ def main():
 
         message_text = re.sub(sing_pattern, "Bucket, sing", message_text)
         query = "Create a prompt for a song-generation LLM based on the following request. Do not include artist names in the prompt. Describe the style, write lyrics, enjoy yourself :)\n\n" \
-            + "Format your response as `[title: your_title_here] [style: your_style_here] [lyrics: your_lyrics_here]`. That is, square bracket, then `style:`, then the suggested style, then close square bracket. Same for lyrics, but with `lyrics:` instead of `style:` Use [intro], [verse], [chorus], [bridge], and [outro] to mark parts of the lyrics, as needed. Newlines are fine. Only 600 characters of lyrics, so keep it short, 3 verses at most imo.\n\n" \
+            + "Format your response as `[title: your_title_here] [style: your_style_here] [lyrics: your_lyrics_here]`. That is, square bracket, then `style:`, then the suggested style, then close square bracket. Same for lyrics, but with `lyrics:` instead of `style:` Use [intro], [verse], [chorus], [bridge], and [outro] to mark parts of the lyrics, as needed. Newlines are fine. Only 500 characters of lyrics, so keep it short, 3 verses at most imo.\n\n" \
             + message_text
 
         async with message.channel.typing():
             await reply_split(message, "Sure, one sec")
 
-            music_prompt = await ask_bucket_async(query, character=character, callback=None)
+            fake_message: bucket_message = {"user": "admin", "content": query}
+            music_prompt = await ask_bucket_async([fake_message], character=character, callback=None)
 
             title_match = re.search(r"\[title:(.*?)\]", music_prompt, re.DOTALL | re.IGNORECASE)
             style_match = re.search(r"\[style:(.*?)\]", music_prompt, re.DOTALL | re.IGNORECASE | re.MULTILINE)
@@ -505,19 +512,13 @@ def main():
     @channel_only
     async def at_bucket(message):
         name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
-        message_text = strip_formatting(message.content)
-        regex_matches = re.findall(name_pattern, message_text)
-        if not regex_matches:
+        if not re.findall(name_pattern, message.content):
             return False
 
         async with message.channel.typing():
             character = "HornyBucket" if str(message.channel.id) in HORNY_CHANNEL_IDS else "Bucket"
 
-            message_text = re.sub(name_pattern, "Bucket,", message_text)
-            message_text = enrich_with_tweet_context(message_text)
-            attachment_context = enrich_with_attachments(message)
-            if attachment_context:
-                message_text = message_text + "\n" + attachment_context
+            messages = await build_reply_context(message)
 
             async def create_or_update(response):
                 if len(response) > max_message_len:
@@ -529,11 +530,10 @@ def main():
             create_or_update.resp_message = None
 
             if MESSAGE_MODE == "SPLIT":
-                await reply_split(message, await ask_bucket_async(message_text, character=character))
+                await reply_split(message, await ask_bucket_async(messages, character=character))
             else:
-                await ask_bucket_async(message_text, callback=create_or_update, character=character)
-        
-        
+                await ask_bucket_async(messages, callback=create_or_update, character=character)
+
         return True
     
 
@@ -571,22 +571,22 @@ Input:
         if output[0].strip().lower()[0] != "y":
             return False
         
-        message_text = strip_formatting(message.content)
-
-        async def create_or_update(response):
-            if len(response) > max_message_len:
-                response = response[:max_message_len]
-            if not create_or_update.resp_message:
-                create_or_update.resp_message = await message.reply(response)
-            else:
-                await create_or_update.resp_message.edit(content=response)
-        create_or_update.resp_message = None
-
         async with message.channel.typing():
+            messages = await build_reply_context(message)
+
+            async def create_or_update(response):
+                if len(response) > max_message_len:
+                    response = response[:max_message_len]
+                if not create_or_update.resp_message:
+                    create_or_update.resp_message = await message.reply(response)
+                else:
+                    await create_or_update.resp_message.edit(content=response)
+            create_or_update.resp_message = None
+
             if MESSAGE_MODE == "SPLIT":
-                await reply_split(message, await ask_bucket_async(message_text, character="Bucket"))
+                await reply_split(message, await ask_bucket_async(messages, character="Bucket"))
             else:
-                await ask_bucket_async(message_text, callback=create_or_update, character="Bucket")
+                await ask_bucket_async(messages, callback=create_or_update, character="Bucket")
         
         return True
 
