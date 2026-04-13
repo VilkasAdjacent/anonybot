@@ -267,14 +267,8 @@ def main():
             attempts += 1
             print("requesting")
             model = "anthropic/claude-opus-4.6"
-            template = f"""
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-
-You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be succinct -- flippant, even. Do not prefix your responses with "Bucket:", or provide any metadata aside from the textual response. Examples of Bucket's responses: {examplesString}<|eot_id|><|start_header_id|>chat history<|end_header_id|>
-
-{{prompt}}<|eot_id|><|start_header_id|>response<|end_header_id|>
-"""
-            async for event in await replicate.async_stream(model, input={"prompt": content, "system_prompt": template, "max_tokens": 1024}):
+            system_prompt = f"You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be succinct -- flippant, even. Do not prefix your responses with \"Bucket:\", or provide any metadata aside from the textual response. Examples of Bucket's responses:\n{examplesString}"
+            async for event in await replicate.async_stream(model, input={"prompt": content, "system_prompt": system_prompt, "max_tokens": 1024}):
 
                 #print(f"event type: {event.event}, content: {str(event)}")
                 response_str = str(event)
