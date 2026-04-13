@@ -406,44 +406,44 @@ You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be 
         if referenced_message.author.id != client.user.id:
             return False
 
-        character = "HornyBucket" if str(message.channel.id) in HORNY_CHANNEL_IDS else "Bucket"
+        async with message.channel.typing():
+            character = "HornyBucket" if str(message.channel.id) in HORNY_CHANNEL_IDS else "Bucket"
 
-        name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
-        reply_chain = []
-        while referenced_message:
-            role = "Bucket" if referenced_message.author.id == client.user.id else "You" #referenced_message.author.display_name
-            message_text = re.sub(name_pattern, "Bucket,", referenced_message.content)
+            name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
+            reply_chain = []
+            while referenced_message:
+                role = "Bucket" if referenced_message.author.id == client.user.id else "You" #referenced_message.author.display_name
+                message_text = re.sub(name_pattern, "Bucket,", referenced_message.content)
+                message_text = enrich_with_tweet_context(message_text)
+                attachment_context = enrich_with_attachments(referenced_message)
+                if attachment_context:
+                    message_text = message_text + "\n" + attachment_context
+                reply_chain.append({"role": role, "content": message_text})
+                referenced_message = await get_reply(referenced_message)
+            reply_chain.reverse()
+
+            name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
+            message_text = strip_formatting(message.content)
+            message_text = re.sub(name_pattern, "Bucket,", message_text)
             message_text = enrich_with_tweet_context(message_text)
-            attachment_context = enrich_with_attachments(referenced_message)
+            attachment_context = enrich_with_attachments(message)
             if attachment_context:
                 message_text = message_text + "\n" + attachment_context
-            reply_chain.append({"role": role, "content": message_text})
-            referenced_message = await get_reply(referenced_message)
-        reply_chain.reverse()
 
-        name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
-        message_text = strip_formatting(message.content)
-        message_text = re.sub(name_pattern, "Bucket,", message_text)
-        message_text = enrich_with_tweet_context(message_text)
-        attachment_context = enrich_with_attachments(message)
-        if attachment_context:
-            message_text = message_text + "\n" + attachment_context
+            async def create_or_update(response):
+                if len(response) > max_message_len:
+                    response = response[:max_message_len]
+                if not create_or_update.resp_message:
+                    create_or_update.resp_message = await message.reply(response)
+                else:
+                    await create_or_update.resp_message.edit(content=response)
+            create_or_update.resp_message = None
 
-        async def create_or_update(response):
-            if len(response) > max_message_len:
-                response = response[:max_message_len]
-            if not create_or_update.resp_message:
-                create_or_update.resp_message = await message.reply(response)
-            else:
-                await create_or_update.resp_message.edit(content=response)
-        create_or_update.resp_message = None
-
-        async with message.channel.typing():
             if MESSAGE_MODE == "SPLIT":
                 await reply_split(await ask_bucket_async(message_text, character=character, context=reply_chain))
             else:
                 await ask_bucket_async(message_text, callback=create_or_update, character=character, context=reply_chain)
-        
+            
         return True
     
     @no_self_respond(client)
@@ -516,24 +516,24 @@ You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be 
         if not regex_matches:
             return False
 
-        character = "HornyBucket" if str(message.channel.id) in HORNY_CHANNEL_IDS else "Bucket"
-
-        message_text = re.sub(name_pattern, "Bucket,", message_text)
-        message_text = enrich_with_tweet_context(message_text)
-        attachment_context = enrich_with_attachments(message)
-        if attachment_context:
-            message_text = message_text + "\n" + attachment_context
-
-        async def create_or_update(response):
-            if len(response) > max_message_len:
-                response = response[:max_message_len]
-            if not create_or_update.resp_message:
-                create_or_update.resp_message = await message.reply(response)
-            else:
-                await create_or_update.resp_message.edit(content=response)
-        create_or_update.resp_message = None
-
         async with message.channel.typing():
+            character = "HornyBucket" if str(message.channel.id) in HORNY_CHANNEL_IDS else "Bucket"
+
+            message_text = re.sub(name_pattern, "Bucket,", message_text)
+            message_text = enrich_with_tweet_context(message_text)
+            attachment_context = enrich_with_attachments(message)
+            if attachment_context:
+                message_text = message_text + "\n" + attachment_context
+
+            async def create_or_update(response):
+                if len(response) > max_message_len:
+                    response = response[:max_message_len]
+                if not create_or_update.resp_message:
+                    create_or_update.resp_message = await message.reply(response)
+                else:
+                    await create_or_update.resp_message.edit(content=response)
+            create_or_update.resp_message = None
+
             if MESSAGE_MODE == "SPLIT":
                 await reply_split(message, await ask_bucket_async(message_text, character=character))
             else:
