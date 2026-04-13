@@ -267,12 +267,12 @@ def main():
         while len(response) == 0 and attempts < 10:
             attempts += 1
             print("requesting")
-            model = "anthropic/claude-opus-4.6"
+            model = "anthropic/claude-4.5-sonnet"
             system_prompt = f"You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be succinct -- flippant, even. Do not prefix your responses with \"Bucket:\", or provide any metadata aside from the textual response. Examples of Bucket's responses:\n{examplesString}"
             async for event in await replicate.async_stream(model, input={"prompt": content, "system_prompt": system_prompt, "max_tokens": 1024}):
 
-                #print(f"event type: {event.event}, content: {str(event)}")
-                response_str = str(event)
+                #print(f"event type: {event.event}, content: {event.data if isinstance(event.data, str) else ''}")
+                response_str = event.data if event.event == event.EventType.OUTPUT else ""
 
                 # If we see something that looks like the end of the dialog, cut it off and stop
                 if "---" in response_str:
@@ -339,7 +339,7 @@ def main():
             return image_description_cache[image_url]
         try:
             result = replicate.run(
-                "anthropic/claude-opus-4.6",
+                "anthropic/claude-4.5-sonnet",
                 input={
                     "prompt": "Describe this image in thorough detail.",
                     "image": image_url,
