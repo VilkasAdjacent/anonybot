@@ -12,6 +12,17 @@ import owo
 
 import requests
 
+TWITTER_URL_PATTERN = r"(?i)https?://(?:www\.)?(?:twitter|x|vxtwitter|fxtwitter|fixvx|girlcockx)\.com/[^/]+/status/(\d+)"
+
+
+def fetch_tweet_info(tweet_id):
+    return requests.get(f"https://api.vxtwitter.com/Twitter/status/{tweet_id}").json()
+
+
+def extract_tweet_ids(text):
+    return re.findall(TWITTER_URL_PATTERN, text)
+
+
 def main():
     load_dotenv()
     TOKEN = os.getenv('BOT_TOKEN')
@@ -32,6 +43,7 @@ def main():
     ]
     author_emojis = dict()
     in_use = set()
+    image_description_cache = {}
 
     @client.event
     async def on_ready():
@@ -325,6 +337,64 @@ You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be 
             return await message.channel.fetch_message(message.reference.message_id)
 
 
+    def describe_image(image_url):
+        if image_url in image_description_cache:
+            return image_description_cache[image_url]
+        try:
+            result = replicate.run(
+                "anthropic/claude-opus-4.6",
+                input={
+                    "prompt": "Describe this image in thorough detail.",
+                    "image": image_url,
+                    "max_image_resolution": 0.5,
+                }
+            )
+            description = "".join(result) if isinstance(result, list) else str(result)
+            image_description_cache[image_url] = description
+            return description
+        except Exception as e:
+            print(f"Failed to describe image {image_url}: {e}")
+            return None
+
+    def enrich_with_tweet_context(text):
+        tweet_ids = extract_tweet_ids(text)
+        if not tweet_ids:
+            return text
+        summaries = []
+        for tweet_id in tweet_ids:
+            try:
+                info = fetch_tweet_info(tweet_id)
+                author = info.get("user_name", "unknown")
+                tweet_text = info.get("text", "")
+                parts = [f'@{author}: "{tweet_text}"']
+                for media in info.get("media_extended", []):
+                    if media.get("type") == "image":
+                        desc = describe_image(media["url"])
+                        if desc:
+                            parts.append(f'Image: {desc}')
+                qrt = info.get("qrt")
+                if qrt:
+                    qrt_author = qrt.get("user_name", "unknown")
+                    qrt_text = qrt.get("text", "")
+                    parts.append(f'Quote of @{qrt_author}: "{qrt_text}"')
+                summaries.append("[Linked tweet — " + " | ".join(parts) + "]")
+            except Exception as e:
+                print(f"Failed to enrich tweet {tweet_id}: {e}")
+        if summaries:
+            return text + "\n" + "\n".join(summaries)
+        return text
+
+    def enrich_with_attachments(discord_message):
+        summaries = []
+        for attachment in discord_message.attachments:
+            if attachment.content_type and attachment.content_type.startswith("image/"):
+                desc = describe_image(attachment.url)
+                if desc:
+                    summaries.append(f"[Attached image: {desc}]")
+        if summaries:
+            return "\n".join(summaries)
+        return ""
+
     @no_self_respond(client)
     @channel_only
     async def reply_to_bucket(message: discord.Message):
@@ -343,13 +413,21 @@ You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be 
         while referenced_message:
             role = "Bucket" if referenced_message.author.id == client.user.id else "You" #referenced_message.author.display_name
             message_text = re.sub(name_pattern, "Bucket,", referenced_message.content)
+            message_text = enrich_with_tweet_context(message_text)
+            attachment_context = enrich_with_attachments(referenced_message)
+            if attachment_context:
+                message_text = message_text + "\n" + attachment_context
             reply_chain.append({"role": role, "content": message_text})
             referenced_message = await get_reply(referenced_message)
-        reply_chain.reverse()    
-        
+        reply_chain.reverse()
+
         name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
         message_text = strip_formatting(message.content)
         message_text = re.sub(name_pattern, "Bucket,", message_text)
+        message_text = enrich_with_tweet_context(message_text)
+        attachment_context = enrich_with_attachments(message)
+        if attachment_context:
+            message_text = message_text + "\n" + attachment_context
 
         async def create_or_update(response):
             if len(response) > max_message_len:
@@ -441,6 +519,10 @@ You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be 
         character = "HornyBucket" if str(message.channel.id) in HORNY_CHANNEL_IDS else "Bucket"
 
         message_text = re.sub(name_pattern, "Bucket,", message_text)
+        message_text = enrich_with_tweet_context(message_text)
+        attachment_context = enrich_with_attachments(message)
+        if attachment_context:
+            message_text = message_text + "\n" + attachment_context
 
         async def create_or_update(response):
             if len(response) > max_message_len:
@@ -518,7 +600,7 @@ Input:
     def twitter_condition(message, expansion):
         url = re.findall(expansion.regex, message.content)[0]
         id = url.split("/")[-1]
-        info = requests.get(f"https://api.vxtwitter.com/Twitter/status/{id}").json()
+        info = fetch_tweet_info(id)
         return any(media["type"] == "video" for media in info["media_extended"]) or info["qrt"] != None or len(info["media_extended"]) > 1
 
 
