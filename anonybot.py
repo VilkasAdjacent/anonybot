@@ -254,7 +254,7 @@ def main():
         while len(response) == 0 and attempts < 10:
             attempts += 1
             print("requesting")
-            model = "anthropic/claude-4.5-sonnet"
+            model = "anthropic/claude-opus-4.6"
             template = f"""
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
