@@ -11,13 +11,16 @@ import replicate
 import discord
 import owo
 
+import aiohttp
 import requests
 
 TWITTER_URL_PATTERN = r"(?i)https?://(?:www\.)?(?:twitter|x|vxtwitter|fxtwitter|fixvx|girlcockx)\.com/[^/]+/status/(\d+)"
 
 
-def fetch_tweet_info(tweet_id):
-    return requests.get(f"https://api.vxtwitter.com/Twitter/status/{tweet_id}").json()
+async def fetch_tweet_info(tweet_id):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.vxtwitter.com/Twitter/status/{tweet_id}") as response:
+            return await response.json()
 
 
 def extract_tweet_ids(text):
@@ -236,8 +239,8 @@ def main():
     
     bucket_message = TypedDict('bucket_message', {'user': str, 'content': str})
 
-    def create_simple_bucket_message(message: discord.Message) -> bucket_message:
-        return {"user": get_user_name(message.author), "content": process_message_text(message)}
+    async def create_simple_bucket_message(message: discord.Message) -> bucket_message:
+        return {"user": get_user_name(message.author), "content": await process_message_text(message)}
 
     async def ask_bucket_async(bucket_messages: list[bucket_message], character="Bucket", callback = None):
 
@@ -334,11 +337,11 @@ def main():
             return await message.channel.fetch_message(message.reference.message_id)
 
 
-    def describe_image(image_url):
+    async def describe_image(image_url):
         if image_url in image_description_cache:
             return image_description_cache[image_url]
         try:
-            result = replicate.run(
+            result = await replicate.async_run(
                 "anthropic/claude-4.5-sonnet",
                 input={
                     "prompt": "Describe this image in thorough detail.",
@@ -353,20 +356,20 @@ def main():
             print(f"Failed to describe image {image_url}: {e}")
             return None
 
-    def enrich_with_tweet_context(text):
+    async def enrich_with_tweet_context(text):
         tweet_ids = extract_tweet_ids(text)
         if not tweet_ids:
             return text
         summaries = []
         for tweet_id in tweet_ids:
             try:
-                info = fetch_tweet_info(tweet_id)
+                info = await fetch_tweet_info(tweet_id)
                 author = info.get("user_name", "unknown")
                 tweet_text = info.get("text", "")
                 parts = [f'@{author}: "{tweet_text}"']
                 for media in info.get("media_extended", []):
                     if media.get("type") == "image":
-                        desc = describe_image(media["url"])
+                        desc = await describe_image(media["url"])
                         if desc:
                             parts.append(f'Image: {desc}')
                 qrt = info.get("qrt")
@@ -381,22 +384,22 @@ def main():
             return text + "\n" + "\n".join(summaries)
         return text
 
-    def enrich_with_attachments(discord_message):
+    async def enrich_with_attachments(discord_message):
         summaries = []
         for attachment in discord_message.attachments:
             if attachment.content_type and attachment.content_type.startswith("image/"):
-                desc = describe_image(attachment.url)
+                desc = await describe_image(attachment.url)
                 if desc:
                     summaries.append(f"[Attached image: {desc}]")
         if summaries:
             return "\n".join(summaries)
         return ""
 
-    def process_message_text(discord_message, strip_fmt=False):
+    async def process_message_text(discord_message, strip_fmt=False):
         text = strip_formatting(discord_message.content) if strip_fmt else discord_message.content
         text = re.sub(r"(?i)\<\@" + str(client.user.id) + r"\>", "Bucket,", text)
-        text = enrich_with_tweet_context(text)
-        attachment_context = enrich_with_attachments(discord_message)
+        text = await enrich_with_tweet_context(text)
+        attachment_context = await enrich_with_attachments(discord_message)
         if attachment_context:
             text = text + "\n" + attachment_context
         return text
@@ -409,7 +412,7 @@ def main():
         ref = message
         while ref:
             user = "Bucket" if ref.author.id == client.user.id else get_user_name(ref)
-            chain.append({"user": user, "content": process_message_text(ref)})
+            chain.append({"user": user, "content": await process_message_text(ref)})
             ref = await get_reply(ref)
         chain.reverse()
         return chain
@@ -591,10 +594,10 @@ Input:
         return True
 
 
-    def twitter_condition(message, expansion):
+    async def twitter_condition(message, expansion):
         url = re.findall(expansion.regex, message.content)[0]
         id = url.split("/")[-1]
-        info = fetch_tweet_info(id)
+        info = await fetch_tweet_info(id)
         return any(media["type"] == "video" for media in info["media_extended"]) or info["qrt"] != None or len(info["media_extended"]) > 1
 
 
@@ -614,7 +617,7 @@ Input:
         for expansion in expansions:
             if not re.findall(expansion.regex, content):
                 continue
-            if expansion.condition and not expansion.condition(message, expansion):
+            if expansion.condition and not await expansion.condition(message, expansion):
                 continue
             any_expanded = True
             content = content.replace(expansion.fr, expansion.to)
