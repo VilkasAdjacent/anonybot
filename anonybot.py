@@ -14,7 +14,7 @@ import owo
 import aiohttp
 import requests
 
-TWITTER_URL_PATTERN = r"(?i)https?://(?:www\.)?(?:twitter|x|vxtwitter|fxtwitter|fixvx|girlcockx)\.com/[^/]+/status/(\d+)"
+TWITTER_URL_PATTERN = r"(?i)https?://(?:www\.)?(?:twitter|x|vxtwitter|fxtwitter|fixvx|girlcockx|stupidpenisx|hitlerx)\.com/[^/]+/status/(\d+)"
 
 
 async def fetch_tweet_info(tweet_id):
