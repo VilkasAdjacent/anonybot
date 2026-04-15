@@ -120,6 +120,7 @@ def main():
 
     @client.event
     async def on_ready():
+        assert client.user is not None
         print(f'{client.user.name} connected')
 
     @client.event
@@ -166,7 +167,7 @@ def main():
             print("No unused emoji left!")
             return "💩"
         else:
-            return random.choice(remaining)
+            return random.choice(list(remaining))
 
     @no_self_respond(client)
     @dm_only
@@ -175,8 +176,8 @@ def main():
 
         # Get the user's anon channel, or bail if can't
         channel = await find_anon_channel(client, message)
-        if channel == None:
-            return
+        if channel is None:
+            return False
 
         # Get emoji from the cache, or make an emoji
         author_id = message.author.id
@@ -392,6 +393,7 @@ def main():
         for msg in response:
             await message.reply(msg, file=file)
 
+        assert client.user is not None
         await message.remove_reaction(thinking_react, client.user)
 
     def is_owo(string: str):
@@ -460,13 +462,14 @@ def main():
             await callback(final)
         return final
 
-    async def get_reply(message: discord.Message) -> discord.Message or None:
+    async def get_reply(message: discord.Message) -> discord.Message | None:
         if not message.reference:
             return None
 
         if message.reference.cached_message:
             return message.reference.cached_message
         else:
+            assert message.reference.message_id is not None
             return await message.channel.fetch_message(message.reference.message_id)
 
     async def describe_image(image_url):
@@ -528,6 +531,7 @@ def main():
         return ""
 
     async def process_message_text(discord_message, strip_fmt=False):
+        assert client.user is not None
         text = strip_formatting(discord_message.content) if strip_fmt else discord_message.content
         text = re.sub(r"(?i)\<\@" + str(client.user.id) + r"\>", "Bucket,", text)
         text = await enrich_with_tweet_context(text)
@@ -536,14 +540,15 @@ def main():
             text = text + "\n" + attachment_context
         return text
 
-    def get_user_name(message):
-        return f"{message.author.display_name} ({message.author.name})"
+    def get_user_name(user: discord.User | discord.Member) -> str:
+        return f"{user.display_name} ({user.name})"
 
     async def build_reply_context(message) -> list[bucket_message]:
+        assert client.user is not None
         chain = []
         ref = message
         while ref:
-            user = "Bucket" if ref.author.id == client.user.id else get_user_name(ref)
+            user = "Bucket" if ref.author.id == client.user.id else get_user_name(ref.author)
             chain.append({"user": user, "content": await process_message_text(ref)})
             ref = await get_reply(ref)
         chain.reverse()
@@ -552,7 +557,9 @@ def main():
     @no_self_respond(client)
     @channel_only
     async def at_bucket_sing(message):
-        sing_pattern = r"(?i)\<\@" + str(client.user.id) + r"\> [sS]ing"
+        anonybot_user = client.user
+        assert anonybot_user is not None
+        sing_pattern = r"(?i)\<\@" + str(anonybot_user.id) + r"\> [sS]ing"
         message_text = strip_formatting(message.content)
         regex_matches = re.findall(sing_pattern, message_text)
         if not regex_matches:
@@ -618,8 +625,9 @@ def main():
         if not message.reference:
             return False
 
+        assert client.user is not None
         referenced_message = await get_reply(message)
-        if referenced_message.author.id != client.user.id:
+        if referenced_message is None or referenced_message.author.id != client.user.id:
             return False
 
         async with message.channel.typing():
@@ -639,7 +647,9 @@ def main():
     @no_self_respond(client)
     @channel_only
     async def at_bucket(message):
-        name_pattern = r"(?i)\<\@" + str(client.user.id) + r"\>"
+        anonybot_user = client.user
+        assert anonybot_user is not None
+        name_pattern = r"(?i)\<\@" + str(anonybot_user.id) + r"\>"
         if not re.findall(name_pattern, message.content):
             return False
 
@@ -714,8 +724,9 @@ Input:
 \"""" + message.content + "\"\nAnswer: "
 
         output = replicate.run("meta/meta-llama-3-70b-instruct", input={ "prompt": prompt, "max_new_tokens": 8 })
-        print(output)
-        if output[0].strip().lower()[0] != "y":
+        first_token = output if isinstance(output, str) else next(output)
+
+        if first_token.strip().lower()[0] != "y":
             return False
 
         async with message.channel.typing():
@@ -747,6 +758,7 @@ Input:
         funcs.append(million_dollars_but_pose)
         funcs.append(nosy_bucket)
 
+    assert TOKEN is not None
     client.run(TOKEN)
 
 
