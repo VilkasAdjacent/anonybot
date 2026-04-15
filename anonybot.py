@@ -390,8 +390,13 @@ def main():
                     response.append(last[i + 1:])
                     break
 
-        for msg in response:
-            await message.reply(msg, file=file)
+        # Reply to the message with the chunks. If there's a file, only attach it to the last message
+        for msg in response[:-1]:
+            await message.reply(msg)
+        if file is not None:
+            await message.reply(response[-1], file=file)  
+        else:
+            await message.reply(response[-1])
 
         assert client.user is not None
         await message.remove_reaction(thinking_react, client.user)
