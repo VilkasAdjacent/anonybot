@@ -358,6 +358,18 @@ def main():
 
     bucket_message = TypedDict('bucket_message', {'user': str, 'content': str})
 
+    def make_create_or_update(message):
+        resp_message: discord.Message | None = None
+        async def create_or_update(response):
+            nonlocal resp_message
+            if len(response) > max_message_len:
+                response = response[:max_message_len]
+            if not resp_message:
+                resp_message = await message.reply(response)
+            else:
+                await resp_message.edit(content=response)
+        return create_or_update
+
     def get_character(message):
         return "HornyBucket" if str(message.channel.id) in HORNY_CHANNEL_IDS else "Bucket"
 
@@ -615,14 +627,7 @@ def main():
 
             messages = await build_reply_context(message)
 
-            async def create_or_update(response):
-                if len(response) > max_message_len:
-                    response = response[:max_message_len]
-                if not create_or_update.resp_message:
-                    create_or_update.resp_message = await message.reply(response)
-                else:
-                    await create_or_update.resp_message.edit(content=response)
-            create_or_update.resp_message = None
+            create_or_update = make_create_or_update(message)
 
             if MESSAGE_MODE == "SPLIT":
                 await reply_split(message, await ask_bucket_async(messages, character=character))
@@ -643,14 +648,7 @@ def main():
 
             messages = await build_reply_context(message)
 
-            async def create_or_update(response):
-                if len(response) > max_message_len:
-                    response = response[:max_message_len]
-                if not create_or_update.resp_message:
-                    create_or_update.resp_message = await message.reply(response)
-                else:
-                    await create_or_update.resp_message.edit(content=response)
-            create_or_update.resp_message = None
+            create_or_update = make_create_or_update(message)
 
             if MESSAGE_MODE == "SPLIT":
                 await reply_split(message, await ask_bucket_async(messages, character=character))
@@ -723,14 +721,7 @@ Input:
         async with message.channel.typing():
             messages = await build_reply_context(message)
 
-            async def create_or_update(response):
-                if len(response) > max_message_len:
-                    response = response[:max_message_len]
-                if not create_or_update.resp_message:
-                    create_or_update.resp_message = await message.reply(response)
-                else:
-                    await create_or_update.resp_message.edit(content=response)
-            create_or_update.resp_message = None
+            create_or_update = make_create_or_update(message)
 
             if MESSAGE_MODE == "SPLIT":
                 await reply_split(message, await ask_bucket_async(messages, character="Bucket"))
