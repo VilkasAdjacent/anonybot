@@ -756,10 +756,10 @@ Answer: yes
 Input:
 \"""" + message.content + "\"\nAnswer: "
 
-        output = replicate.run("meta/meta-llama-3-70b-instruct", input={ "prompt": prompt, "max_new_tokens": 8 })
-        first_token = output if isinstance(output, str) else next(output)
-
-        if first_token.strip().lower()[0] != "y":
+        filter_result = replicate.run("anthropic/claude-4.5-haiku", input={ "prompt": prompt, "max_tokens": 1024 })
+        filter_response = "".join(filter_result) if isinstance(filter_result, list) else str(filter_result)
+        if not filter_response.strip() or filter_response.strip().lower()[0] != "y":
+            print("not reacting")
             return False
 
         async with message.channel.typing():
@@ -773,6 +773,97 @@ Input:
                 await ask_bucket_async(messages, callback=create_or_update, character="Bucket")
 
         return True
+
+    @no_self_respond(client)
+    @channel_only
+    async def nosy_bucket_react(message):
+        if random.random() > .2:
+            return False
+        if len(message.content) < 5:
+            return False
+
+        print("considering to react to message...")
+        # Stage 1: Haiku 4.5 decides if the message is worth reacting to
+        filter_prompt = """You are Bucket, a sentient bucket-bot. Would the following message be fun or interesting to emoji-react to? Be generous — if there's anything funny, emotional, weird, surprising, topical, or even vaguely bucket-adjacent, say yes. Only say no for completely bland or uninteresting messages. No preamble, just yes or no.
+---
+\"""" + message.content + "\"\nAnswer: "
+
+        try:
+            filter_result = await replicate.async_run(
+                "anthropic/claude-4.5-haiku",
+                input={"prompt": filter_prompt, "max_tokens": 1024}
+            )
+            filter_response = "".join(filter_result) if isinstance(filter_result, list) else str(filter_result)
+            if not filter_response.strip() or filter_response.strip().lower()[0] != "y":
+                print("not reacting")
+                return False
+        except Exception as e:
+            print(f"nosy_bucket_react filter failed: {e}")
+            return False
+
+        print("reacting :)")
+        # Stage 2: Sonnet 4.5 picks the actual reactions
+        react_prompt = """You are Bucket, a sentient bucket-bot picking emoji reactions for a Discord message. You're witty, a little chaotic, and you love bucket-related things (🪣 is your signature).
+
+Pick emoji reaction(s) for this message. Guidelines:
+- Reactions should be funny, relevant, and in-character
+- You can use 1-5 emoji reactions
+- Single reactions are great. Multiple reactions are great too. Match the vibe.
+- 🪣 is your signature but don't overuse it — only when it fits
+- You CAN spell out a short word using regional indicator letter emoji (🇦 🇧 🇨 ... 🇿). Each letter is a separate reaction. This is fun for punchy words (3-6 letters) but do NOT always spell words — it's a sometimes treat. You CANNOT use duplicate letters since Discord only allows one of each reaction.
+- Standard Unicode emoji are your bread and butter
+
+Respond with ONLY the emoji separated by spaces. No other text.
+
+Examples:
+Message: "I just spilled water everywhere"
+🪣 💀
+
+Message: "that's so sad"
+😢
+
+Message: "lmao gottem"
+🇱 🇲 🇦 🇴
+
+Message: "I love buckets so much"
+❤️ 🪣
+
+Message: "what a nice day outside"
+☀️
+
+Message: "this code is absolutely cursed"
+💀 🔥
+
+Message: "hey guys check out this cool fish I caught"
+🐟 🇳 🇮 🇨 🇪
+---
+Message: \"""" + message.content + "\"\n"
+
+        try:
+            react_result = await replicate.async_run(
+                "anthropic/claude-4.5-sonnet",
+                input={"prompt": react_prompt, "max_tokens": 1024}
+            )
+            react_text = "".join(react_result) if isinstance(react_result, list) else str(react_result)
+        except Exception as e:
+            print(f"nosy_bucket_react react generation failed: {e}")
+            return False
+
+        # Parse and apply reactions
+        print(f"reacting with {react_text}")
+        reactions = react_text.strip().split()
+        added = 0
+        for reaction in reactions:
+            reaction = reaction.strip()
+            if not reaction or added >= 5:
+                break
+            try:
+                await message.add_reaction(reaction)
+                added += 1
+            except discord.HTTPException:
+                continue
+
+        return added > 0
 
     # ── Launch ─────────────────────────────────────────────────────────────────
     if "ANON" in MODES:
@@ -790,6 +881,7 @@ Input:
         funcs.append(million_dollars_but_answer)
         funcs.append(million_dollars_but_pose)
         funcs.append(nosy_bucket)
+        funcs.append(nosy_bucket_react)
 
     assert TOKEN is not None
     client.run(TOKEN)
