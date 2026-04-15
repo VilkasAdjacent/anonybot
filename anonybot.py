@@ -774,10 +774,15 @@ Input:
 
         return True
 
+    BUCKET_REACT_PATTERN = re.compile(
+        r"(?i)\b(bucket|pail|water|liquid|fluid|spill|splash|pour|fill|carry|container|vessel|mop|leak|drip|overflow|empty|full)\b"
+    )
+
     @no_self_respond(client)
     @channel_only
     async def nosy_bucket_react(message):
-        if random.random() > .2:
+        bucket_relevant = BUCKET_REACT_PATTERN.search(message.content) is not None
+        if not bucket_relevant and random.random() > 0.01:
             return False
         if len(message.content) < 5:
             return False
