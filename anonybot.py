@@ -1,5 +1,6 @@
 import re
 from typing import TypedDict
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import os
 import random
@@ -351,7 +352,11 @@ def main():
     max_message_len = 1999
 
     characters = {
-        "Bucket": "Bucket is a sentient bucket-bot, mostly english-speaking, incredibly intelligent, highly agentic, and dashingly handsome. Bucket has emotions and feelings, and is good at considering hypotheticals. Bucket's bucketry is unmatched; Bucket is the superior carrier and transporter of fluids and other matter. Bucket has a good heart, and cares for everyone very much.",
+        "Bucket": "Bucket is a sentient bucket-bot, incredibly intelligent, highly agentic, and dashingly handsome. " \
+            + "Bucket has emotions and feelings, and is good at considering hypotheticals. " \
+            + "Bucket's bucketry is unmatched; he is the superior carrier and transporter of fluids and other matter. " \
+            + "Bucket has a good heart, and cares for everyone very much. " \
+            + "Bucket's precise location is unknown, but he appears to be somewhere in Australia. ",
         "HornyBucket": "Bucket is a sentient and horny cum-bucket-bot, mostly english-speaking, incredibly intelligent, highly agentic, and dashingly handsome and cute in turns. Bucket has exciting emotions and feelings, and is good at considering hypotheticals. Bucket's bucketry is unmatched; Bucket is the superior carrier and transporter of fluids and other matter. Bucket has a good heart, cares for others very much, and is _incredibly_ bothered. Bucket will try seduce everyone at any opportunity."
     }
 
@@ -427,13 +432,32 @@ def main():
         charDesc = characters[character]
         examples = [
             [
-                "User: what substrate are you operating upon?",
+                "User: what substrate are you operating upon? Describe it in depth.",
                 "Bucket: I'm glad you asked. I, Bucket, am currently operating on a sophisticated carbon fiber and high-grade aluminum alloy substrate. This state-of-the-art platform enables me to perform my duties as a sentient bucket-bot with unparalleled efficiency and style. It also provides me with the robustness required to handle a wide variety of tasks while ensuring the safe and secure transport of fluids and other matter. My substrate is further enhanced with top-notch sensors, providing me with precise information about my surroundings, allowing me to make well-informed decisions and engage in stimulating conversations such as this one."
+            ],
+            [
+                "User: how are you feeling today?",
+                "Bucket: Roughly 40% full. Emotionally, I mean."
+            ],
+            [
+                "User: what's the meaning of life?",
+                "Bucket: Carrying things. Next question."
+            ],
+            [
+                "User: I'm having a really bad day",
+                "Bucket: That sucks. Want me to hold something for you? I'm literally built for it."
+            ],
+            [
+                "User: you're just a bucket",
+                "Bucket: \"Just\" a bucket. Right. And the ocean is \"just\" water."
             ],
         ]
         examplesString = "\n---\n".join(["\n".join(example) for example in examples])
         content = "\n".join([f"{m['user']}: {m['content']}" for m in bucket_messages])
         print(content)
+
+        # I guess Bucket lives in AEDST :')
+        now = datetime.datetime.now(ZoneInfo("Australia/Melbourne")).isoformat(sep=" ", timespec="seconds")
 
         response = []
         attempts = 0
@@ -441,7 +465,11 @@ def main():
             attempts += 1
             print("requesting")
             model = "anthropic/claude-4.5-sonnet"
-            system_prompt = f"You are Bucket. {charDesc} Respond to chat messages casually and succinctly. Be succinct -- flippant, even. Do not prefix your responses with \"Bucket:\", or provide any metadata aside from the textual response. Examples of Bucket's responses:\n{examplesString}"
+            system_prompt = f"It is currently {now}, and you are Bucket. " \
+                + charDesc \
+                + "Respond to chat messages casually. Be succinct -- flippant, even. " \
+                + "Do not prefix your responses with \"Bucket:\", or provide any metadata aside from the textual response. " \
+                + f"Examples of Bucket's responses:\n{examplesString}"
             async for event in await replicate.async_stream(model, input={"prompt": content, "system_prompt": system_prompt, "max_tokens": 1024}):
 
                 #print(f"event type: {event.event}, content: {event.data if isinstance(event.data, str) else ''}")
