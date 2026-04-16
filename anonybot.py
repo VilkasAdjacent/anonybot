@@ -1,4 +1,5 @@
 import re
+import logging
 from typing import TypedDict
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -102,11 +103,21 @@ def bucket_put_processor(message: str):
     return regex_match[2]
 
 
+log = logging.getLogger("anonybot")
+
+
 def main():
     # ── Setup ──────────────────────────────────────────────────────────────────
     load_dotenv()
+
+    logging.basicConfig(
+        level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     TOKEN = os.getenv('BOT_TOKEN')
     MODES = os.getenv('MODES', "ANON,BUCKET,EXPAND").split(',') # ANON, BUCKET, EXPAND, AI
+    log.info("Enabled modes: %s", MODES)
     MDB_POSE_THRESHOLD = float(os.getenv('MDB_POSE_THRESHOLD', "0"))
     HORNY_CHANNEL_IDS = os.getenv('HORNY_CHANNEL_IDS', "").split(',')
     MESSAGE_MODE = os.getenv('MESSAGE_MODE', "EDIT") # or "EDIT"
@@ -122,13 +133,13 @@ def main():
     @client.event
     async def on_ready():
         assert client.user is not None
-        print(f'{client.user.name} connected')
+        log.info("%s connected to %d guild(s)", client.user.name, len(client.guilds))
 
     @client.event
     async def on_message(message):
         for func in funcs:
             if await func(message):
-                # print(f"applied {func.__name__}")
+                log.debug("Handler matched: %s (message=%s)", func.__name__, message.id)
                 break
 
     # ── ANON mode ──────────────────────────────────────────────────────────────
@@ -144,9 +155,11 @@ def main():
         channels = [[c for c in guild.channels if c.name == "anonymous"] for guild in guilds]
         channels = [channel for sublist in channels for channel in sublist]
         if not channels:
+            log.warning("No #anonymous channel found for user %s", message.author)
             message.channel.send("Couldn't find a matching #anonymous channel")
             return None
         if len(channels) > 1:
+            log.warning("Multiple #anonymous channels found for user %s", message.author)
             await message.channel.send("More than one matching server, panic")
             return None
         return channels[0]
@@ -165,7 +178,7 @@ def main():
     def random_new_emoji():
         remaining = set(emoji_options) - set(in_use)
         if len(remaining) == 0:
-            print("No unused emoji left!")
+            log.warning("No unused emoji left, falling back to 💩")
             return "💩"
         else:
             return random.choice(list(remaining))
@@ -194,6 +207,7 @@ def main():
         in_use.add(author_emoji)
 
         # Send the message with the emoji prepended
+        log.info("Relaying anonymous message from user %s as %s", message.author.id, author_emoji)
         await channel.send(f"{author_emoji} {message.content}")
         return True
 
@@ -256,12 +270,14 @@ def main():
         if len(bucket_storage) > 10:
             to_remove = bucket_storage.pop(random.randrange(len(bucket_storage)))
             bucket_storage.append(item)
+            log.info("Bucket swapped item: took %r, dropped %r (storage=%d)", item, to_remove, len(bucket_storage))
 
             drop_phrase = select_weighted(bucket_drop_phrases)
 
             await message.reply(f"Bucket {take_phrase} {item} but {drop_phrase} {to_remove}")
         else:
             bucket_storage.append(item)
+            log.info("Bucket stored item: %r (storage=%d)", item, len(bucket_storage))
 
             bucket_eat_phrases = [
                 ("", 100),
@@ -287,9 +303,11 @@ def main():
 
         if len(bucket_storage) > 0:
             item = bucket_storage.pop(random.randrange(len(bucket_storage)))
+            log.info("Bucket dropped item: %r (storage=%d)", item, len(bucket_storage))
             drop_phrase = select_weighted(bucket_drop_phrases)
             await message.reply(f"Bucket {drop_phrase} {item}")
         else:
+            log.debug("Bucket is empty, nothing to take")
             await message.reply("You tip Bucket over and shake him out, but there's nothing there :(")
 
         return True
@@ -343,6 +361,7 @@ def main():
         if not any_expanded:
             return False
 
+        log.info("Expanded URLs in message %s", message.id)
         await reply_split(message, content)
         return True
 
@@ -427,7 +446,7 @@ def main():
                 r = owo.substitute(r)
             return r
 
-        print(bucket_messages)
+        log.debug("Bucket messages: %s", bucket_messages)
 
         charDesc = characters[character]
         examples = [
@@ -454,7 +473,7 @@ def main():
         ]
         examplesString = "\n---\n".join(["\n".join(example) for example in examples])
         content = "\n".join([f"{m['user']}: {m['content']}" for m in bucket_messages])
-        print(content)
+        log.debug("Prompt content: %s", content)
 
         # I guess Bucket lives in AEDST :')
         now = datetime.datetime.now(ZoneInfo("Australia/Melbourne")).isoformat(sep=" ", timespec="seconds")
@@ -463,7 +482,7 @@ def main():
         attempts = 0
         while len(response) == 0 and attempts < 10:
             attempts += 1
-            print("requesting")
+            log.info("Requesting AI response (attempt %d, character=%s)", attempts, character)
             model = "anthropic/claude-4.5-sonnet"
             system_prompt = f"It is currently {now}, and you are Bucket. " \
                 + charDesc \
@@ -477,7 +496,7 @@ def main():
 
                 # If we see something that looks like the end of the dialog, cut it off and stop
                 if "---" in response_str:
-                    print("prematurely terminating")
+                    log.debug("AI response contained '---', truncating stream early")
                     i = response_str.index("---")
                     response.append(response_str[:i])
                     break
@@ -488,6 +507,7 @@ def main():
                     await callback(process_response_list(response))
 
         if len(response) == 0:
+            log.error("Replicate API returned empty response after %d attempts", attempts)
             raise Exception("Replicate API failed too many times")
 
         final = process_response_list(response)
@@ -507,7 +527,9 @@ def main():
 
     async def describe_image(image_url):
         if image_url in image_description_cache:
+            log.debug("Image description cache hit: %s", image_url)
             return image_description_cache[image_url]
+        log.info("Describing image via AI: %s", image_url)
         try:
             result = await replicate.async_run(
                 "anthropic/claude-4.5-sonnet",
@@ -521,7 +543,7 @@ def main():
             image_description_cache[image_url] = description
             return description
         except Exception as e:
-            print(f"Failed to describe image {image_url}: {e}")
+            log.error("Failed to describe image %s: %s", image_url, e)
             return None
 
     async def enrich_with_tweet_context(text):
@@ -547,7 +569,7 @@ def main():
                     parts.append(f'Quote of @{qrt_author}: "{qrt_text}"')
                 summaries.append("[Linked tweet — " + " | ".join(parts) + "]")
             except Exception as e:
-                print(f"Failed to enrich tweet {tweet_id}: {e}")
+                log.error("Failed to enrich tweet %s: %s", tweet_id, e)
         if summaries:
             return text + "\n" + "\n".join(summaries)
         return text
@@ -605,11 +627,13 @@ def main():
             + "Format your response as `[title: your_title_here] [style: your_style_here] [lyrics: your_lyrics_here]`. That is, square bracket, then `style:`, then the suggested style, then close square bracket. Same for lyrics, but with `lyrics:` instead of `style:` Use [intro], [verse], [chorus], [bridge], and [outro] to mark parts of the lyrics, as needed. Newlines are fine. Only 500 characters of lyrics, so keep it short, 3 verses at most imo.\n\n" \
             + message_text
 
+        log.info("Song requested by %s in channel %s", message.author, message.channel)
         async with message.channel.typing():
             await reply_split(message, "Sure, one sec")
 
             fake_message: bucket_message = {"user": "admin", "content": query}
             music_prompt = await ask_bucket_async([fake_message], character=character, callback=None)
+            log.debug("Generated music prompt: %s", music_prompt[:200])
 
             title_match = re.search(r"\[title:(.*?)\]", music_prompt, re.DOTALL | re.IGNORECASE)
             style_match = re.search(r"\[style:(.*?)\]", music_prompt, re.DOTALL | re.IGNORECASE | re.MULTILINE)
@@ -647,6 +671,7 @@ def main():
 
                 await reply_split(message, f"{check_this_out}:\n\n{lyrics_text}", file=discord_file)
             except Exception as e:
+                log.error("Song generation failed: %s", e)
                 await reply_split(message, f"Sorry, my vocal cords are feeling a bit under the weather today :( but what I would have sang was \"{music_prompt}\", and I couldn't because {str(e)}")
 
         return True
@@ -759,8 +784,10 @@ Input:
         filter_result = replicate.run("anthropic/claude-4.5-haiku", input={ "prompt": prompt, "max_tokens": 1024 })
         filter_response = "".join(filter_result) if isinstance(filter_result, list) else str(filter_result)
         if not filter_response.strip() or filter_response.strip().lower()[0] != "y":
-            print("not reacting")
+            log.debug("nosy_bucket: filter rejected message %s", message.id)
             return False
+
+        log.info("nosy_bucket: responding to message %s", message.id)
 
         async with message.channel.typing():
             messages = await build_reply_context(message)
@@ -787,7 +814,7 @@ Input:
         if len(message.content) < 5:
             return False
 
-        print("considering to react to message...")
+        log.debug("nosy_bucket_react: considering message %s", message.id)
         # Stage 1: Haiku 4.5 decides if the message is worth reacting to
         filter_prompt = """You are Bucket, a sentient bucket-bot. Would the following message be fun or interesting to emoji-react to? Be generous — if there's anything funny, emotional, weird, surprising, topical, or even vaguely bucket-adjacent, say yes. Only say no for completely bland or uninteresting messages. No preamble, just yes or no.
 ---
@@ -800,13 +827,13 @@ Input:
             )
             filter_response = "".join(filter_result) if isinstance(filter_result, list) else str(filter_result)
             if not filter_response.strip() or filter_response.strip().lower()[0] != "y":
-                print("not reacting")
+                log.debug("nosy_bucket_react: filter rejected message %s", message.id)
                 return False
         except Exception as e:
-            print(f"nosy_bucket_react filter failed: {e}")
+            log.error("nosy_bucket_react filter failed: %s", e)
             return False
 
-        print("reacting :)")
+        log.info("nosy_bucket_react: generating reactions for message %s", message.id)
         # Stage 2: Sonnet 4.5 picks the actual reactions
         react_prompt = """You are Bucket, a sentient bucket-bot picking emoji reactions for a Discord message. You're witty, a little chaotic, and you love bucket-related things (🪣 is your signature).
 
@@ -851,11 +878,11 @@ Message: \"""" + message.content + "\"\n"
             )
             react_text = "".join(react_result) if isinstance(react_result, list) else str(react_result)
         except Exception as e:
-            print(f"nosy_bucket_react react generation failed: {e}")
+            log.error("nosy_bucket_react react generation failed: %s", e)
             return False
 
         # Parse and apply reactions
-        print(f"reacting with {react_text}")
+        log.info("nosy_bucket_react: reacting with %s", react_text.strip())
         reactions = react_text.strip().split()
         added = 0
         for reaction in reactions:
