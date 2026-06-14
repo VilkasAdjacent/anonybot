@@ -892,7 +892,7 @@ Input:
 
 Pick emoji reaction(s) for this message. Guidelines:
 - Reactions should be funny, relevant, and in-character
-- You can use 1-5 emoji reactions
+- You can use 1-8 emoji reactions. You cannot use the same reaction multiple times -- "🇦 🇦 🇦" is invalid
 - Single reactions are great. Multiple reactions are great too. Match the vibe.
 - 🪣 is your signature but don't overuse it — only when it fits
 - You CAN spell out a short word using regional indicator letter emoji (🇦 🇧 🇨 ... 🇿). Each letter is a separate reaction. This is fun for punchy words (3-6 letters) but do NOT always spell words — it's a sometimes treat. You CANNOT use duplicate letters since Discord only allows one of each reaction.
@@ -940,7 +940,7 @@ Message: \"""" + message.content + "\"\n"
         added = 0
         for reaction in reactions:
             reaction = reaction.strip()
-            if not reaction or added >= 5:
+            if not reaction or added >= 8:
                 break
             try:
                 await message.add_reaction(reaction)
