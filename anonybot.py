@@ -1000,9 +1000,9 @@ Message: \"""" + message.content + "\"\n"
         funcs.append(at_bucket)
         funcs.append(million_dollars_but_answer)
         funcs.append(million_dollars_but_pose)
+        funcs.append(bucket_abc_news)
         funcs.append(nosy_bucket)
         funcs.append(nosy_bucket_react)
-        funcs.append(bucket_abc_news)
 
     assert TOKEN is not None
     client.run(TOKEN)
