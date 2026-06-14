@@ -536,7 +536,7 @@ def main():
         while len(response) == 0 and attempts < 10:
             attempts += 1
             log.info("Requesting AI response (attempt %d, character=%s)", attempts, character)
-            model = "anthropic/claude-4.5-sonnet"
+            model = "anthropic/claude-opus-4.7"
             system_prompt = f"It is currently {now}, and you are Bucket. " \
                 + charDesc \
                 + "Respond to chat messages casually. Be succinct -- flippant, even. " \
@@ -887,7 +887,7 @@ Input:
             return False
 
         log.info("nosy_bucket_react: generating reactions for message %s", message.id)
-        # Stage 2: Sonnet 4.5 picks the actual reactions
+        # Stage 2: An LLM picks the actual reactions
         react_prompt = """You are Bucket, a sentient bucket-bot picking emoji reactions for a Discord message. You're witty, a little chaotic, and you love bucket-related things (🪣 is your signature).
 
 Pick emoji reaction(s) for this message. Guidelines:
@@ -926,7 +926,7 @@ Message: \"""" + message.content + "\"\n"
 
         try:
             react_result = await replicate.async_run(
-                "anthropic/claude-4.5-sonnet",
+                "anthropic/claude-opus-4.7",
                 input={"prompt": react_prompt, "max_tokens": 1024}
             )
             react_text = "".join(react_result) if isinstance(react_result, list) else str(react_result)
