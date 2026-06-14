@@ -1,4 +1,5 @@
 import re
+import json
 import logging
 from typing import TypedDict
 from zoneinfo import ZoneInfo
@@ -27,6 +28,58 @@ async def fetch_tweet_info(tweet_id):
 
 def extract_tweet_ids(text):
     return re.findall(TWITTER_URL_PATTERN, text)
+
+
+ABC_NEWS_URL_PATTERN = r"(?i)https?://(?:www\.)?abc\.net\.au/news/\d{4}-\d{2}-\d{2}/[^\s/<>]+/\d+"
+
+
+def extract_abc_article_urls(text):
+    return re.findall(ABC_NEWS_URL_PATTERN, text)
+
+
+def _collect_abc_text(node, parts):
+    if isinstance(node, dict):
+        if node.get("type") == "text" and isinstance(node.get("content"), str):
+            parts.append(node["content"])
+        if isinstance(node.get("descriptor"), dict):
+            _collect_abc_text(node["descriptor"], parts)
+        for child in node.get("children", []) or []:
+            _collect_abc_text(child, parts)
+    elif isinstance(node, list):
+        for child in node:
+            _collect_abc_text(child, parts)
+
+
+async def fetch_abc_article(url):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.get(url) as response:
+            if response.status != 200:
+                log.error("ABC article fetch failed (%d): %s", response.status, url)
+                return None
+            html = await response.text()
+
+    match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+    if not match:
+        log.error("ABC article missing __NEXT_DATA__: %s", url)
+        return None
+
+    try:
+        data = json.loads(match.group(1))
+        article = data["props"]["pageProps"]["document"]["loaders"]["articledetail"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        log.error("ABC article parse failed (%s): %s", url, e)
+        return None
+
+    parts = []
+    _collect_abc_text(article.get("text"), parts)
+    body = "\n".join(p.strip() for p in parts if p.strip())[:4000]
+    title = (article.get("title") or "").strip()
+    synopsis = (article.get("synopsis") or "").strip()
+    if not title and not body:
+        log.error("ABC article had no usable text: %s", url)
+        return None
+    return {"title": title, "synopsis": synopsis, "body": body}
 
 
 def select_weighted(lst):
@@ -897,6 +950,41 @@ Message: \"""" + message.content + "\"\n"
 
         return added > 0
 
+    @no_self_respond(client)
+    @channel_only
+    async def bucket_abc_news(message):
+        urls = extract_abc_article_urls(message.content)
+        if not urls:
+            return False
+
+        article = await fetch_abc_article(urls[0])
+        if article is None:
+            return False
+
+        log.info("bucket_abc_news: responding to ABC article %s (message=%s)", urls[0], message.id)
+        async with message.channel.typing():
+            character = get_character(message)
+
+            article_text = article["title"]
+            if article["body"]:
+                article_text += "\n\n" + article["body"]
+            elif article["synopsis"]:
+                article_text += "\n\n" + article["synopsis"]
+
+            prompt = "Someone just dropped this ABC News article in chat. Give your hot take on it, Bucket-style: " \
+                + "short, sharp, opinionated, and a little spicy. One or two sentences, react to what's actually in it.\n" \
+                + "---\n" + article_text + "\n---"
+
+            fake_message: bucket_message = {"user": get_user_name(message.author), "content": prompt}
+            create_or_update = make_create_or_update(message)
+
+            if MESSAGE_MODE == "SPLIT":
+                await reply_split(message, await ask_bucket_async([fake_message], character=character))
+            else:
+                await ask_bucket_async([fake_message], callback=create_or_update, character=character)
+
+        return True
+
     # ── Launch ─────────────────────────────────────────────────────────────────
     if "ANON" in MODES:
         funcs.append(anonymous)
@@ -914,6 +1002,7 @@ Message: \"""" + message.content + "\"\n"
         funcs.append(million_dollars_but_pose)
         funcs.append(nosy_bucket)
         funcs.append(nosy_bucket_react)
+        funcs.append(bucket_abc_news)
 
     assert TOKEN is not None
     client.run(TOKEN)
