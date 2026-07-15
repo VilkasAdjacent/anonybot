@@ -493,8 +493,8 @@ def main():
 
         owo_mode = any(is_owo(m["content"]) for m in bucket_messages)
 
-        def process_response_list(response_list):
-            r = strip_quotes("".join(response_list))
+        def process_response(text):
+            r = strip_quotes(text)
             if owo_mode:
                 r = owo.substitute(r)
             return r
@@ -531,39 +531,56 @@ def main():
         # I guess Bucket lives in AEDST :')
         now = datetime.datetime.now(ZoneInfo("Australia/Melbourne")).isoformat(sep=" ", timespec="seconds")
 
-        response = []
+        acc = ""
         attempts = 0
-        while len(response) == 0 and attempts < 10:
+        while not acc and attempts < 10:
             attempts += 1
             log.info("Requesting AI response (attempt %d, character=%s)", attempts, character)
-            model = "anthropic/claude-4.5-sonnet"
+            model = "anthropic/claude-fable-5"
             system_prompt = f"It is currently {now}, and you are Bucket. " \
                 + charDesc \
                 + "Respond to chat messages casually. Be succinct -- flippant, even. " \
                 + "Do not prefix your responses with \"Bucket:\", or provide any metadata aside from the textual response. " \
                 + f"Examples of Bucket's responses:\n{examplesString}"
+
+            # Replicate's async_stream mishandles stream resets, replaying the
+            # whole response so far as a single chunk (instead of a delta). We
+            # keep `acc` as the best-known deduped text and `cur` as the current
+            # stream's running view; a chunk that restarts from the beginning is
+            # treated as a replay rather than appended.
+            acc = ""
+            cur = ""
+            chunks = 0
             async for event in await replicate.async_stream(model, input={"prompt": content, "system_prompt": system_prompt, "max_tokens": 1024}):
 
                 #print(f"event type: {event.event}, content: {event.data if isinstance(event.data, str) else ''}")
-                response_str = event.data if event.event == event.EventType.OUTPUT else ""
+                chunk = event.data if event.event == event.EventType.OUTPUT else ""
+                if not chunk:
+                    continue
+
+                if acc and chunk.startswith(acc[:20]):   # replay detected
+                    cur = chunk
+                else:                                     # normal delta
+                    cur += chunk
+
+                if len(cur) > len(acc):
+                    acc = cur
 
                 # If we see something that looks like the end of the dialog, cut it off and stop
-                if "---" in response_str:
+                if "---" in acc:
                     log.debug("AI response contained '---', truncating stream early")
-                    i = response_str.index("---")
-                    response.append(response_str[:i])
+                    acc = acc[:acc.index("---")]
                     break
 
-                response.append(response_str)
+                chunks += 1
+                if chunks % 16 == 0 and callback is not None:
+                    await callback(process_response(acc))
 
-                if len(response) % 16 == 0 and callback is not None:
-                    await callback(process_response_list(response))
-
-        if len(response) == 0:
+        if not acc:
             log.error("Replicate API returned empty response after %d attempts", attempts)
             raise Exception("Replicate API failed too many times")
 
-        final = process_response_list(response)
+        final = process_response(acc)
         if callback is not None:
             await callback(final)
         return final
@@ -585,7 +602,7 @@ def main():
         log.info("Describing image via AI: %s", image_url)
         try:
             result = await replicate.async_run(
-                "anthropic/claude-4.5-sonnet",
+                "anthropic/claude-fable-5",
                 input={
                     "prompt": "Describe this image in thorough detail.",
                     "image": image_url,
@@ -926,10 +943,10 @@ Message: \"""" + message.content + "\"\n"
 
         try:
             react_result = await replicate.async_run(
-                "anthropic/claude-4.5-sonnet",
+                "anthropic/claude-fable-5",
                 input={"prompt": react_prompt, "max_tokens": 1024}
             )
-            react_text = "".join(react_result) if isinstance(react_result, list) else str(react_result)
+            react_text = replicate_text(react_result)
         except Exception as e:
             log.error("nosy_bucket_react react generation failed: %s", e)
             return False
