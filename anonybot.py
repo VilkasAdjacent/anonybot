@@ -267,7 +267,13 @@ def main():
     # ── BUCKET mode ────────────────────────────────────────────────────────────
     # (Processors: bucket_give_processor, bucket_put_processor — defined above main())
 
-    bucket_storage = []
+    bucket_item = TypedDict('bucket_item', {'name': str, 'giver': str})
+    bucket_storage: list[bucket_item] = []
+    bucket_donations: dict[str, int] = {}
+
+    def describe_item(item: bucket_item) -> str:
+        return f"{item['name']} (courtesy of {item['giver']})"
+
     bucket_drop_phrases = [
         ("drops", 100),
         ("yeets", 5),
@@ -320,6 +326,10 @@ def main():
         ]
         take_phrase = select_weighted(bucket_take_phrases)
 
+        giver = message.author.display_name
+        bucket_donations[giver] = bucket_donations.get(giver, 0) + 1
+        item = {"name": item, "giver": giver}
+
         if len(bucket_storage) > 10:
             to_remove = bucket_storage.pop(random.randrange(len(bucket_storage)))
             bucket_storage.append(item)
@@ -327,7 +337,7 @@ def main():
 
             drop_phrase = select_weighted(bucket_drop_phrases)
 
-            await message.reply(f"Bucket {take_phrase} {item} but {drop_phrase} {to_remove}")
+            await message.reply(f"Bucket {take_phrase} {item['name']} but {drop_phrase} {describe_item(to_remove)}")
         else:
             bucket_storage.append(item)
             log.info("Bucket stored item: %r (storage=%d)", item, len(bucket_storage))
@@ -341,7 +351,7 @@ def main():
                 (", begrudgingly", 50),
             ]
             eat_phrase = select_weighted(bucket_eat_phrases)
-            await message.reply(f"Bucket {take_phrase} {item}{eat_phrase}")
+            await message.reply(f"Bucket {take_phrase} {item['name']}{eat_phrase}")
 
         return True
 
@@ -358,7 +368,7 @@ def main():
             item = bucket_storage.pop(random.randrange(len(bucket_storage)))
             log.info("Bucket dropped item: %r (storage=%d)", item, len(bucket_storage))
             drop_phrase = select_weighted(bucket_drop_phrases)
-            await message.reply(f"Bucket {drop_phrase} {item}")
+            await message.reply(f"Bucket {drop_phrase} {describe_item(item)}")
         else:
             log.debug("Bucket is empty, nothing to take")
             await message.reply("You tip Bucket over and shake him out, but there's nothing there :(")
@@ -375,10 +385,28 @@ def main():
             return False
 
         if len(bucket_storage) > 0:
-            await message.reply(f"Bucket currently contains: {'; '.join(bucket_storage)}")
+            await message.reply(f"Bucket currently contains: {'; '.join(describe_item(i) for i in bucket_storage)}")
         else:
             await message.reply("You tip Bucket over and shake him out, but there's nothing there :(")
 
+        return True
+
+    @no_self_respond(client)
+    @channel_only
+    async def bucket_donors(message):
+        # Check if the message is asking who's been feeding bucket
+        message_text = strip_formatting(message.content)
+        regex_match = re.match(r"(?i)^who (fed|feeds|filled|fills|has been feeding) bucket", message_text)
+        if not regex_match:
+            return False
+
+        if not bucket_donations:
+            await message.reply("Nobody. Bucket has never known the touch of a donor :(")
+            return True
+
+        leaderboard = sorted(bucket_donations.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        lines = [f"{rank}. {giver} — {count} item{'s' if count != 1 else ''}" for rank, (giver, count) in enumerate(leaderboard, 1)]
+        await message.reply("Bucket's most generous benefactors:\n" + "\n".join(lines))
         return True
 
     # ── EXPAND mode ────────────────────────────────────────────────────────────
@@ -1011,6 +1039,7 @@ Message: \"""" + message.content + "\"\n"
         funcs.append(bucket_give_item)
         funcs.append(bucket_take_item)
         funcs.append(bucket_inventory)
+        funcs.append(bucket_donors)
     if "AI" in MODES:
         funcs.append(at_bucket_sing)
         funcs.append(reply_to_bucket)
