@@ -12,6 +12,7 @@ from collections import namedtuple
 
 import replicate
 import discord
+from openai import AsyncOpenAI
 import owo
 
 import aiohttp
@@ -176,6 +177,19 @@ def main():
     HORNY_CHANNEL_IDS = os.getenv('HORNY_CHANNEL_IDS', "").split(',')
     MESSAGE_MODE = os.getenv('MESSAGE_MODE', "EDIT") # or "EDIT"
 
+    # Text models go through OpenRouter; Replicate is still used for music generation
+    SMART_MODEL = "anthropic/claude-opus-5.5"
+    FAST_MODEL = "anthropic/claude-haiku-5.5"
+    openrouter = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=os.getenv("OPENROUTER_API_KEY"))
+
+    async def complete(model: str, content, max_tokens=1024) -> str:
+        response = await openrouter.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content or ""
+
     intents = discord.Intents.default()
     intents.members = True
     intents.message_content = True
@@ -294,8 +308,7 @@ def main():
             + "For example, \"a sock\" + \"the concept of Tuesday\" might become \"Sockday, the eternal sock\". " \
             + "Respond with ONLY the new item's name, under 8 words, with an article (a/an/the) if appropriate."
         try:
-            result = await replicate.async_run("anthropic/claude-4.5-haiku", input={"prompt": prompt, "max_tokens": 64})
-            fused_name = "".join(result) if isinstance(result, list) else str(result)
+            fused_name = await complete(FAST_MODEL, prompt, max_tokens=64)
             fused_name = strip_quotes(strip_formatting(fused_name.strip().splitlines()[0].strip()))
         except Exception as e:
             log.error("Bucket alchemy failed: %s", e)
@@ -605,49 +618,43 @@ def main():
         while not acc and attempts < 10:
             attempts += 1
             log.info("Requesting AI response (attempt %d, character=%s)", attempts, character)
-            model = "anthropic/claude-fable-5"
             system_prompt = f"It is currently {now}, and you are Bucket. " \
                 + charDesc \
                 + "Respond to chat messages casually. Be succinct -- flippant, even. " \
                 + "Do not prefix your responses with \"Bucket:\", or provide any metadata aside from the textual response. " \
                 + f"Examples of Bucket's responses:\n{examplesString}"
 
-            # Replicate's async_stream mishandles stream resets, replaying the
-            # whole response so far as a single chunk (instead of a delta). We
-            # keep `acc` as the best-known deduped text and `cur` as the current
-            # stream's running view; a chunk that restarts from the beginning is
-            # treated as a replay rather than appended.
             acc = ""
-            cur = ""
             chunks = 0
-            async for event in await replicate.async_stream(model, input={"prompt": content, "system_prompt": system_prompt, "max_tokens": 1024}):
+            stream = await openrouter.chat.completions.create(
+                model=SMART_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                max_tokens=1024,
+                stream=True,
+            )
+            async with stream:
+                async for event in stream:
+                    chunk = event.choices[0].delta.content if event.choices else None
+                    if not chunk:
+                        continue
+                    acc += chunk
 
-                #print(f"event type: {event.event}, content: {event.data if isinstance(event.data, str) else ''}")
-                chunk = event.data if event.event == event.EventType.OUTPUT else ""
-                if not chunk:
-                    continue
+                    # If we see something that looks like the end of the dialog, cut it off and stop
+                    if "---" in acc:
+                        log.debug("AI response contained '---', truncating stream early")
+                        acc = acc[:acc.index("---")]
+                        break
 
-                if acc and chunk.startswith(acc[:20]):   # replay detected
-                    cur = chunk
-                else:                                     # normal delta
-                    cur += chunk
-
-                if len(cur) > len(acc):
-                    acc = cur
-
-                # If we see something that looks like the end of the dialog, cut it off and stop
-                if "---" in acc:
-                    log.debug("AI response contained '---', truncating stream early")
-                    acc = acc[:acc.index("---")]
-                    break
-
-                chunks += 1
-                if chunks % 16 == 0 and callback is not None:
-                    await callback(process_response(acc))
+                    chunks += 1
+                    if chunks % 16 == 0 and callback is not None:
+                        await callback(process_response(acc))
 
         if not acc:
-            log.error("Replicate API returned empty response after %d attempts", attempts)
-            raise Exception("Replicate API failed too many times")
+            log.error("OpenRouter returned empty response after %d attempts", attempts)
+            raise Exception("OpenRouter API failed too many times")
 
         final = process_response(acc)
         if callback is not None:
@@ -670,15 +677,10 @@ def main():
             return image_description_cache[image_url]
         log.info("Describing image via AI: %s", image_url)
         try:
-            result = await replicate.async_run(
-                "anthropic/claude-fable-5",
-                input={
-                    "prompt": "Describe this image in thorough detail.",
-                    "image": image_url,
-                    "max_image_resolution": 0.5,
-                }
-            )
-            description = "".join(result) if isinstance(result, list) else str(result)
+            description = await complete(SMART_MODEL, [
+                {"type": "text", "text": "Describe this image in thorough detail."},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ])
             image_description_cache[image_url] = description
             return description
         except Exception as e:
@@ -958,8 +960,7 @@ Answer: yes
 Input:
 \"""" + message.content + "\"\nAnswer: "
 
-        filter_result = replicate.run("anthropic/claude-4.5-haiku", input={ "prompt": prompt, "max_tokens": 1024 })
-        filter_response = "".join(filter_result) if isinstance(filter_result, list) else str(filter_result)
+        filter_response = await complete(FAST_MODEL, prompt)
         if not filter_response.strip() or filter_response.strip().lower()[0] != "y":
             log.debug("nosy_bucket: filter rejected message %s", message.id)
             return False
@@ -992,17 +993,13 @@ Input:
             return False
 
         log.debug("nosy_bucket_react: considering message %s", message.id)
-        # Stage 1: Haiku 4.5 decides if the message is worth reacting to
+        # Stage 1: Haiku decides if the message is worth reacting to
         filter_prompt = """You are Bucket, a sentient bucket-bot. Would the following message be fun or interesting to emoji-react to? Be generous — if there's anything funny, emotional, weird, surprising, topical, or even vaguely bucket-adjacent, say yes. Only say no for completely bland or uninteresting messages. No preamble, just yes or no.
 ---
 \"""" + message.content + "\"\nAnswer: "
 
         try:
-            filter_result = await replicate.async_run(
-                "anthropic/claude-4.5-haiku",
-                input={"prompt": filter_prompt, "max_tokens": 1024}
-            )
-            filter_response = "".join(filter_result) if isinstance(filter_result, list) else str(filter_result)
+            filter_response = await complete(FAST_MODEL, filter_prompt)
             if not filter_response.strip() or filter_response.strip().lower()[0] != "y":
                 log.debug("nosy_bucket_react: filter rejected message %s", message.id)
                 return False
@@ -1011,7 +1008,7 @@ Input:
             return False
 
         log.info("nosy_bucket_react: generating reactions for message %s", message.id)
-        # Stage 2: Sonnet 4.5 picks the actual reactions
+        # Stage 2: Opus picks the actual reactions
         react_prompt = """You are Bucket, a sentient bucket-bot picking emoji reactions for a Discord message. You're witty, a little chaotic, and you love bucket-related things (🪣 is your signature).
 
 Pick emoji reaction(s) for this message. Guidelines:
@@ -1049,11 +1046,7 @@ Message: "hey guys check out this cool fish I caught"
 Message: \"""" + message.content + "\"\n"
 
         try:
-            react_result = await replicate.async_run(
-                "anthropic/claude-fable-5",
-                input={"prompt": react_prompt, "max_tokens": 1024}
-            )
-            react_text = replicate_text(react_result)
+            react_text = await complete(SMART_MODEL, react_prompt)
         except Exception as e:
             log.error("nosy_bucket_react react generation failed: %s", e)
             return False
