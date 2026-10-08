@@ -178,7 +178,7 @@ def main():
     MESSAGE_MODE = os.getenv('MESSAGE_MODE', "EDIT") # or "EDIT"
 
     # Text models go through OpenRouter; Replicate is still used for music generation
-    SMART_MODEL = "anthropic/claude-opus-5.5"
+    SMART_MODEL = "anthropic/claude-haiku-5.5"
     FAST_MODEL = "anthropic/claude-haiku-5.5"
     openrouter = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=os.getenv("OPENROUTER_API_KEY"))
 
