@@ -172,6 +172,7 @@ def main():
     MODES = os.getenv('MODES', "ANON,BUCKET,EXPAND").split(',') # ANON, BUCKET, EXPAND, AI
     log.info("Enabled modes: %s", MODES)
     MDB_POSE_THRESHOLD = float(os.getenv('MDB_POSE_THRESHOLD', "0"))
+    BUCKET_ALCHEMY_CHANCE = float(os.getenv('BUCKET_ALCHEMY_CHANCE', "0.1"))
     HORNY_CHANNEL_IDS = os.getenv('HORNY_CHANNEL_IDS', "").split(',')
     MESSAGE_MODE = os.getenv('MESSAGE_MODE', "EDIT") # or "EDIT"
 
@@ -282,6 +283,33 @@ def main():
             details += f", est. {value}"
         return f"{item['name']} ({details})"
 
+    async def try_bucket_alchemy() -> str | None:
+        # Fuse two random items in the bucket into a new one. Returns a description of what happened, or None
+        if "AI" not in MODES or len(bucket_storage) < 2 or random.random() >= BUCKET_ALCHEMY_CHANCE:
+            return None
+
+        first, second = random.sample(bucket_storage, 2)
+        prompt = f"Two items have fused together inside a magical bucket: \"{first['name']}\" and \"{second['name']}\". " \
+            + "Invent the single new item they became -- a funny portmanteau or surreal combination. " \
+            + "For example, \"a sock\" + \"the concept of Tuesday\" might become \"Sockday, the eternal sock\". " \
+            + "Respond with ONLY the new item's name, under 8 words, with an article (a/an/the) if appropriate."
+        try:
+            result = await replicate.async_run("anthropic/claude-4.5-haiku", input={"prompt": prompt, "max_tokens": 64})
+            fused_name = "".join(result) if isinstance(result, list) else str(result)
+            fused_name = strip_quotes(strip_formatting(fused_name.strip().splitlines()[0].strip()))
+        except Exception as e:
+            log.error("Bucket alchemy failed: %s", e)
+            return None
+        if not fused_name:
+            return None
+
+        givers = list(dict.fromkeys([first["giver"], second["giver"]]))
+        bucket_storage.remove(first)
+        bucket_storage.remove(second)
+        bucket_storage.append({"name": fused_name, "giver": " & ".join(givers)})
+        log.info("Bucket alchemy: %r + %r -> %r", first["name"], second["name"], fused_name)
+        return f"{first['name']} and {second['name']} have fused into **{fused_name}**!"
+
     bucket_drop_phrases = [
         ("drops", 100),
         ("yeets", 5),
@@ -340,7 +368,10 @@ def main():
         value = bucket_appraisals.get(normalise_item_name(item_name))
         item_text = f"{item_name} (appraised at {value})" if value else item_name
 
-        if len(bucket_storage) > 10:
+        if len(bucket_storage) > 10 and (alchemy := await try_bucket_alchemy()):
+            bucket_storage.append(item)
+            await message.reply(f"Bucket {take_phrase} {item_text}, but his contents begin to bubble ominously... {alchemy}")
+        elif len(bucket_storage) > 10:
             to_remove = bucket_storage.pop(random.randrange(len(bucket_storage)))
             bucket_storage.append(item)
             log.info("Bucket swapped item: took %r, dropped %r (storage=%d)", item, to_remove, len(bucket_storage))
