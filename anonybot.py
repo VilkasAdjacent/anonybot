@@ -129,6 +129,14 @@ def channel_only(func):
     return wrapper
 
 
+def is_ignored_channel(channel, ignored_ids: set[str]) -> bool:
+    # True if the channel itself is listed, or (for a thread) its parent channel is listed
+    if str(channel.id) in ignored_ids:
+        return True
+    parent_id = getattr(channel, "parent_id", None)
+    return parent_id is not None and str(parent_id) in ignored_ids
+
+
 def no_self_respond(client):
     def decorator(func):
         async def wrapper(message):
@@ -175,6 +183,11 @@ def main():
     MDB_POSE_THRESHOLD = float(os.getenv('MDB_POSE_THRESHOLD', "0"))
     BUCKET_ALCHEMY_CHANCE = float(os.getenv('BUCKET_ALCHEMY_CHANCE', "0.1"))
     HORNY_CHANNEL_IDS = os.getenv('HORNY_CHANNEL_IDS', "").split(',')
+    # Channels/threads listed here are never processed: no replies, no reactions, nothing sent to an
+    # LLM. Listing a channel id also mutes its threads; list a thread id to mute only that thread.
+    IGNORED_CHANNEL_IDS = {x.strip() for x in os.getenv('IGNORED_CHANNEL_IDS', "").split(',') if x.strip()}
+    if IGNORED_CHANNEL_IDS:
+        log.info("Ignored channel IDs: %s", sorted(IGNORED_CHANNEL_IDS))
     MESSAGE_MODE = os.getenv('MESSAGE_MODE', "EDIT") # or "EDIT"
 
     # Text models go through OpenRouter; Replicate is still used for music generation
@@ -205,6 +218,9 @@ def main():
 
     @client.event
     async def on_message(message):
+        if is_ignored_channel(message.channel, IGNORED_CHANNEL_IDS):
+            log.debug("Ignoring message %s in muted channel %s", message.id, message.channel.id)
+            return
         for func in funcs:
             if await func(message):
                 log.debug("Handler matched: %s (message=%s)", func.__name__, message.id)
@@ -744,6 +760,9 @@ def main():
         chain = []
         ref = message
         while ref:
+            if is_ignored_channel(ref.channel, IGNORED_CHANNEL_IDS):
+                log.debug("Reply chain hits muted channel %s; truncating context", ref.channel.id)
+                break
             user = "Bucket" if ref.author.id == client.user.id else get_user_name(ref.author)
             chain.append({"user": user, "content": await process_message_text(ref)})
             ref = await get_reply(ref)
