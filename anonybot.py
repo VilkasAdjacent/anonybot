@@ -270,9 +270,17 @@ def main():
     bucket_item = TypedDict('bucket_item', {'name': str, 'giver': str})
     bucket_storage: list[bucket_item] = []
     bucket_donations: dict[str, int] = {}
+    bucket_appraisals: dict[str, str] = {}  # normalised item name -> value, e.g. "40L"
+
+    def normalise_item_name(name: str) -> str:
+        name = name.strip().strip(".!?,").lower()
+        return re.sub(r"^(a|an|the|some|my|your) ", "", name)
 
     def describe_item(item: bucket_item) -> str:
-        return f"{item['name']} (courtesy of {item['giver']})"
+        details = f"courtesy of {item['giver']}"
+        if value := bucket_appraisals.get(normalise_item_name(item["name"])):
+            details += f", est. {value}"
+        return f"{item['name']} ({details})"
 
     bucket_drop_phrases = [
         ("drops", 100),
@@ -290,7 +298,7 @@ def main():
         message_text = strip_formatting(message.content)
         bucket_processors = [bucket_put_processor, bucket_give_processor]
         for processor in bucket_processors:
-            if item := processor(message_text):
+            if item_name := processor(message_text):
                 break
         else:
             return False
@@ -328,7 +336,9 @@ def main():
 
         giver = message.author.display_name
         bucket_donations[giver] = bucket_donations.get(giver, 0) + 1
-        item = {"name": item, "giver": giver}
+        item: bucket_item = {"name": item_name, "giver": giver}
+        value = bucket_appraisals.get(normalise_item_name(item_name))
+        item_text = f"{item_name} (appraised at {value})" if value else item_name
 
         if len(bucket_storage) > 10:
             to_remove = bucket_storage.pop(random.randrange(len(bucket_storage)))
@@ -337,7 +347,7 @@ def main():
 
             drop_phrase = select_weighted(bucket_drop_phrases)
 
-            await message.reply(f"Bucket {take_phrase} {item['name']} but {drop_phrase} {describe_item(to_remove)}")
+            await message.reply(f"Bucket {take_phrase} {item_text} but {drop_phrase} {describe_item(to_remove)}")
         else:
             bucket_storage.append(item)
             log.info("Bucket stored item: %r (storage=%d)", item, len(bucket_storage))
@@ -351,7 +361,7 @@ def main():
                 (", begrudgingly", 50),
             ]
             eat_phrase = select_weighted(bucket_eat_phrases)
-            await message.reply(f"Bucket {take_phrase} {item['name']}{eat_phrase}")
+            await message.reply(f"Bucket {take_phrase} {item_text}{eat_phrase}")
 
         return True
 
@@ -709,6 +719,44 @@ def main():
 
     @no_self_respond(client)
     @channel_only
+    async def bucket_appraise(message):
+        assert client.user is not None
+        message_text = strip_formatting(message.content)
+        regex_match = re.match(r"(?i)^(?:\<\@" + str(client.user.id) + r"\>|bucket),? (?:please )?appraise (.+)", message_text, re.DOTALL)
+        if not regex_match:
+            return False
+
+        item_name = regex_match[1].strip()
+        normalised = normalise_item_name(item_name)
+        in_bucket = [i for i in bucket_storage if normalise_item_name(i["name"]) == normalised]
+
+        query = "Appraise the following item, Bucket-style, as if on a prestigious antiques TV show. " \
+            + "Invent an outlandish provenance, comment on its condition (moisture levels are relevant), " \
+            + "and give an estimated value in litres (L) -- the only currency Bucket recognises. 2-4 sentences. " \
+            + "Begin your response with the value in the format `[value: 40L]`, then the appraisal.\n\n" \
+            + f"Item: {item_name}"
+        if in_bucket:
+            query += f"\n(This item is currently inside you, Bucket. It was given to you by {in_bucket[0]['giver']}.)"
+
+        log.info("Appraisal requested by %s: %r (in bucket: %s)", message.author, item_name, bool(in_bucket))
+        async with message.channel.typing():
+            fake_message: bucket_message = {"user": get_user_name(message.author), "content": query}
+            appraisal = await ask_bucket_async([fake_message], character=get_character(message))
+
+            value_match = re.search(r"\[value:\s*([^\]]+?)\s*\]", appraisal, re.IGNORECASE)
+            if not value_match:
+                await reply_split(message, appraisal)
+                return True
+
+            value = value_match[1]
+            bucket_appraisals[normalised] = value
+            appraisal = (appraisal[:value_match.start()] + appraisal[value_match.end():]).strip()
+            await reply_split(message, f"🪣🔍 **{item_name}** — estimated value: **{value}**\n{appraisal}")
+
+        return True
+
+    @no_self_respond(client)
+    @channel_only
     async def at_bucket_sing(message):
         anonybot_user = client.user
         assert anonybot_user is not None
@@ -1041,6 +1089,7 @@ Message: \"""" + message.content + "\"\n"
         funcs.append(bucket_inventory)
         funcs.append(bucket_donors)
     if "AI" in MODES:
+        funcs.append(bucket_appraise)
         funcs.append(at_bucket_sing)
         funcs.append(reply_to_bucket)
         funcs.append(at_bucket)
