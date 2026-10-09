@@ -1013,7 +1013,7 @@ Input:
 
         log.debug("nosy_bucket_react: considering message %s", message.id)
         # Stage 1: Haiku decides if the message is worth reacting to
-        filter_prompt = """You are Bucket, a sentient bucket-bot. Would the following message be fun or interesting to emoji-react to? Be generous — if there's anything funny, emotional, weird, surprising, topical, or even vaguely bucket-adjacent, say yes. Only say no for completely bland or uninteresting messages. No preamble, just yes or no.
+        filter_prompt = """You are Bucket, a sentient bucket-bot. Would the following message be fun or interesting to emoji-react to? You react to some messages, not most — a reaction should feel like a nice surprise, not a habit. Say yes when the message clearly stands out: genuinely funny, notably emotional, strikingly weird or surprising, or actually about buckets, spills, or pouring things. A word like "fill", "empty", or "water" used in passing doesn't make a message bucket-related. Say no for ordinary chat, logistics, short acknowledgements, and messages that are only mildly interesting. When it's a toss-up, lean no. No preamble, just yes or no.
 ---
 \"""" + message.content + "\"\nAnswer: "
 
